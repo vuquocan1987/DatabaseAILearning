@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "databaseailearning"
+version = "0.1.0"
+description = ""
+authors = ["An Vu <vuquocan1987@gmail.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12"
+supabase = ">=2.20.0,<3.0.0"
+python-dotenv = "^1.1.1"
+openai = "^1.109.1"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
