@@ -10,7 +10,7 @@ import os
 import generate_questions_test
 
 load_dotenv()
-# load_dotenv(dotenv_path=".env_production", override=True)
+load_dotenv(dotenv_path=".env_production", override=True)
 
 
 class QuestionType(Enum):
