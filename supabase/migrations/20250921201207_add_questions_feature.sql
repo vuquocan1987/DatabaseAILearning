@@ -1,6 +1,5 @@
 -- =========================
--- Complete Question Bank Database Schema
--- Optimized for the IntelligentQuestionGenerator Python code
+-- Simplified Question Bank Database Schema
 -- =========================
 
 -- Drop existing tables if they exist (in dependency order)
@@ -36,6 +35,7 @@ CREATE TYPE question_type AS ENUM (
   'matching',
   'ordering'
 );
+
 CREATE OR REPLACE FUNCTION generate_slug(topic_name TEXT) 
 RETURNS TEXT AS $$
 BEGIN
@@ -47,7 +47,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 -- CORE TABLES
 -- =========================
 
--- Topics with hierarchical structure and metadata
+-- Topics with hierarchical structure (no metadata)
 CREATE TABLE topics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -56,14 +56,13 @@ CREATE TABLE topics (
   parent_id UUID REFERENCES topics(id) ON DELETE CASCADE,
   path LTREE,
   sort_order INTEGER DEFAULT 0,
-  metadata JSONB DEFAULT '{}',
   created_by UUID REFERENCES auth.users(id) DEFAULT auth.uid(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(slug)
 );
 
--- Questions with comprehensive metadata support
+-- Questions (no metadata)
 CREATE TABLE questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   topic_id UUID REFERENCES topics(id) ON DELETE CASCADE,
@@ -72,23 +71,21 @@ CREATE TABLE questions (
   explanation TEXT,
   points INTEGER DEFAULT 1 CHECK (points > 0),
   difficulty_level INTEGER DEFAULT 1 CHECK (difficulty_level BETWEEN 1 AND 5),
-  metadata JSONB DEFAULT '{}',
   created_by UUID REFERENCES auth.users(id) DEFAULT auth.uid(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Answer choices for multiple choice, true/false, matching questions
+-- Answer choices for multiple choice, true/false, matching questions (no metadata)
 CREATE TABLE choices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   question_id UUID REFERENCES questions(id) ON DELETE CASCADE,
   choice_text TEXT NOT NULL,
   is_correct BOOLEAN DEFAULT false,
-  sort_order INTEGER DEFAULT 0,
-  metadata JSONB DEFAULT '{}'
+  sort_order INTEGER DEFAULT 0
 );
 
--- Correct answers for short answer, fill-in-blank, essay questions
+-- Correct answers for short answer, fill-in-blank, essay questions (no metadata)
 CREATE TABLE correct_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   question_id UUID REFERENCES questions(id) ON DELETE CASCADE,
@@ -96,8 +93,7 @@ CREATE TABLE correct_answers (
   is_case_sensitive BOOLEAN DEFAULT false,
   is_exact_match BOOLEAN DEFAULT true,
   points INTEGER DEFAULT 1,
-  sort_order INTEGER DEFAULT 0,
-  metadata JSONB DEFAULT '{}'
+  sort_order INTEGER DEFAULT 0
 );
 
 -- User profiles extending Supabase auth
@@ -107,7 +103,6 @@ CREATE TABLE user_profiles (
   full_name TEXT,
   avatar_url TEXT,
   role TEXT DEFAULT 'student' CHECK (role IN ('admin', 'teacher', 'student')),
-  preferences JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -123,8 +118,7 @@ CREATE TABLE user_sessions (
   total_score INTEGER DEFAULT 0,
   max_possible_score INTEGER DEFAULT 0,
   started_at TIMESTAMPTZ DEFAULT NOW(),
-  completed_at TIMESTAMPTZ,
-  metadata JSONB DEFAULT '{}'
+  completed_at TIMESTAMPTZ
 );
 
 -- User answers and responses
@@ -137,8 +131,7 @@ CREATE TABLE user_answers (
   is_correct BOOLEAN,
   points_earned INTEGER DEFAULT 0,
   time_spent_seconds INTEGER,
-  answered_at TIMESTAMPTZ DEFAULT NOW(),
-  metadata JSONB DEFAULT '{}'
+  answered_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- =========================
@@ -149,16 +142,12 @@ CREATE TABLE user_answers (
 CREATE INDEX idx_topics_path ON topics USING GIST (path);
 CREATE INDEX idx_topics_parent ON topics (parent_id);
 CREATE INDEX idx_topics_created_by ON topics (created_by);
-CREATE INDEX idx_topics_metadata ON topics USING GIN (metadata);
--- Use regular B-tree index for category_type text extraction
-CREATE INDEX idx_topics_category_type ON topics ((metadata->>'category_type'));
 
 -- Questions indexes
 CREATE INDEX idx_questions_topic ON questions(topic_id);
 CREATE INDEX idx_questions_type ON questions(question_type);
 CREATE INDEX idx_questions_difficulty ON questions(difficulty_level);
 CREATE INDEX idx_questions_created_by ON questions(created_by);
-CREATE INDEX idx_questions_metadata ON questions USING GIN (metadata);
 
 -- Choices and answers indexes
 CREATE INDEX idx_choices_question ON choices(question_id, sort_order);
@@ -263,43 +252,24 @@ CREATE TRIGGER update_session_stats_trigger
 -- HELPER FUNCTIONS
 -- =========================
 
--- Get all leaf topics (topics with no children) - Critical for your Python code
+-- Get all leaf topics (topics with no children)
 CREATE OR REPLACE FUNCTION get_leaf_topics()
 RETURNS TABLE (
     id UUID,
     name TEXT,
     description TEXT,
     path LTREE,
-    metadata JSONB,
     parent_id UUID
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT t.id, t.name, t.description, t.path, t.metadata, t.parent_id
+    SELECT t.id, t.name, t.description, t.path, t.parent_id
     FROM topics t
     WHERE NOT EXISTS (
         SELECT 1 FROM topics child 
         WHERE child.parent_id = t.id
     )
     AND t.parent_id IS NOT NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Get topics by category type (main_category, subcategory, leaf_topic)
-CREATE OR REPLACE FUNCTION get_topics_by_category(category_type TEXT)
-RETURNS TABLE (
-    id UUID,
-    name TEXT,
-    description TEXT,
-    path LTREE,
-    metadata JSONB,
-    parent_id UUID
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT t.id, t.name, t.description, t.path, t.metadata, t.parent_id
-    FROM topics t
-    WHERE t.metadata->>'category_type' = get_topics_by_category.category_type;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -328,8 +298,7 @@ CREATE OR REPLACE FUNCTION get_course_stats(main_topic_id UUID)
 RETURNS TABLE (
     total_topics INTEGER,
     total_questions INTEGER,
-    total_leaf_topics INTEGER,
-    completion_percentage NUMERIC
+    total_leaf_topics INTEGER
 ) AS $$
 DECLARE
     topic_path LTREE;
@@ -344,16 +313,7 @@ BEGIN
          WHERE t.path <@ topic_path) as total_questions,
         (SELECT COUNT(*)::INTEGER FROM topics t 
          WHERE t.path <@ topic_path 
-         AND NOT EXISTS (SELECT 1 FROM topics child WHERE child.parent_id = t.id)) as total_leaf_topics,
-        CASE 
-            WHEN (SELECT COUNT(*) FROM topics WHERE path <@ topic_path AND metadata->>'category_type' = 'leaf_topic') > 0
-            THEN ROUND(
-                (SELECT COUNT(*) FROM topics WHERE path <@ topic_path AND metadata ? 'questions_generated') * 100.0 /
-                (SELECT COUNT(*) FROM topics WHERE path <@ topic_path AND metadata->>'category_type' = 'leaf_topic'),
-                2
-            )
-            ELSE 0
-        END as completion_percentage;
+         AND NOT EXISTS (SELECT 1 FROM topics child WHERE child.parent_id = t.id)) as total_leaf_topics;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -406,18 +366,3 @@ CREATE POLICY "Users can manage their own answers" ON user_answers FOR ALL USING
 CREATE POLICY "Profiles are viewable by everyone" ON user_profiles FOR SELECT USING (true);
 CREATE POLICY "Users can update their own profile" ON user_profiles FOR UPDATE USING (auth.uid() = id);
 CREATE POLICY "Users can insert their own profile" ON user_profiles FOR INSERT WITH CHECK (auth.uid() = id);
-
--- =========================
--- SAMPLE DATA (Optional)
--- =========================
-
--- Insert a sample topic hierarchy for testing
--- Uncomment if you want sample data:
-
-/*
-INSERT INTO topics (name, description, parent_id, metadata) VALUES 
-('Sample Course', 'A sample course for testing', NULL, '{"course_type": "sample", "analysis": {"subject_area": "Testing"}}');
-
--- Get the ID for subsequent inserts
--- You would need to replace this with the actual UUID from the insert above
-*/
